@@ -1,0 +1,147 @@
+separator: " | "
+blocks:
+  - name: sound_volume
+    interval: 5
+    interpreter: awk -e
+    script: |
+      BEGIN {
+          cmd = "pactl get-sink-volume @DEFAULT_SINK@"
+          while ((cmd | getline sink) > 0) {
+              # Split the line by spaces
+              split(sink, parts, " ")
+
+              # Check if the 5th element ends with '%'
+              if (length(parts[5]) > 0 && substr(parts[5], length(parts[5]), 1) == "%") {
+                  print "Volume: " parts[5]
+                  exit
+              }
+          }
+          close(cmd)
+          print "Volume: N/A"
+      }
+    format: "{{.Text}}"
+
+  - name: display_status
+    interval: 10
+    interpreter: awk -e
+    script: |
+      BEGIN {
+        cmd = "swaymsg -t get_outputs"
+        outputs_json = ""
+        while ((cmd | getline line) > 0) {
+          outputs_json = outputs_json line
+        }
+        close(cmd)
+
+        connected = 0
+        output_names = ""
+        while (match(outputs_json, /"name":"([^"]+)".*?"active":(true|false)/, matches)) {
+          output_names = output_names matches[1] " (" (matches[2] == "true" ? "active" : "inactive") ") "
+          outputs_json = substr(outputs_json, RSTART + RLENGTH)
+          connected++
+        }
+
+        if (connected > 0) {
+          print "Displays: " output_names
+        } else {
+          print "Displays: None"
+        }
+      }
+    format: "{{.Text}}"
+
+  - name: memory_usage
+    interval: 10
+    interpreter: awk -e
+    script: |
+      BEGIN {
+        while ((getline < "/proc/meminfo") > 0) {
+          if ($1 == "MemTotal:") total = $2
+          if ($1 == "MemAvailable:") available = $2
+        }
+        close("/proc/meminfo")
+        used = total - available
+        used_percent = (used / total) * 100
+        printf "%d/%dMB %.2f\n", used/1024, total/1024, used_percent
+      }
+    format: '{{ $a := splitn " " 2 .Text }}{{Symbol $a._1 }} {{ $a._0 }}'
+
+  - name: cpu_usage
+    interval: 1
+    interpreter: awk -e
+    script: |
+      BEGIN {
+          # Read the load average from /proc/loadavg
+          while ((getline line < "/proc/loadavg") > 0) {
+              load = line
+          }
+          close("/proc/loadavg")
+      
+          # Read the number of CPUs from /proc/cpuinfo
+          ncpu = 0
+          while ((getline line < "/proc/cpuinfo") > 0) {
+              if (line ~ /^processor/) {
+                  ncpu++
+              }
+          }
+          close("/proc/cpuinfo")
+      
+          # Calculate the CPU usage percentage
+          pct = load
+
+          # Print the CPU usage percentage
+          printf "%.1f%\n", pct
+      }
+    format: "{{Symbol .Text}} CPU: {{.Text}}"
+
+  - name: network_transit
+    interval: 1
+    interpreter: awk -e
+    script: |
+      # Function to get rx and tx bytes
+      function get_bytes(interface, file, result) {
+          while ((getline line < file) > 0) {
+              if (line ~ interface ":") {
+                  split(line, a, ":")
+                  split(a[2], b, " ")
+                  result = b[1] "," b[9]  # rx and tx bytes
+                  close(file)  # Close the file after use
+                  return result
+              }
+          }
+          close(file)  # Ensure the file is closed if not found
+          return "0,0"
+      }
+      BEGIN {
+          interface = "wlan0"  # Change this if using a different interface
+          file = "/proc/net/dev"
+          
+          # Get initial rx and tx bytes
+          split(get_bytes(interface, file), initial, ",")
+          rx_bytes_initial = initial[1] + 0  # Ensure numeric
+          tx_bytes_initial = initial[2] + 0  # Ensure numeric
+          
+          # Sleep for 1 second
+          system("sleep 0.5")
+          
+          # Get final rx and tx bytes
+          split(get_bytes(interface, file), final, ",")
+          rx_bytes_final = final[1] + 0  # Ensure numeric
+          tx_bytes_final = final[2] + 0  # Ensure numeric
+          
+          # Calculate the difference
+          rx_bytes_diff = rx_bytes_final - rx_bytes_initial
+          tx_bytes_diff = tx_bytes_final - tx_bytes_initial
+          
+          # Convert bytes to Megabits (1 byte = 8 bits, 1 Megabit = 1,000,000 bits)
+          rx_mbits = (rx_bytes_diff * 8) / 1000000
+          tx_mbits = (tx_bytes_diff * 8) / 1000000
+          
+          printf "Rx: %.2fMb Tx: %.2fMb\n", rx_mbits, tx_mbits
+      }
+    format: |
+      {{- $parts := split " " .Text -}}
+      {{- $rx := trimSuffix "Mb" $parts._1 -}}
+      {{- $tx := trimSuffix "Mb" $parts._3 -}}
+      ↓{{$rx}}Mb ↑{{$tx}}Mb
+    #{{- if ne $rx "0.00" }}↓{{$rx}}Mb {{ end -}}
+    #{{- if ne $tx "0.00" }}↑{{$tx}}Mb{{- end -}}
