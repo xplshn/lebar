@@ -1,53 +1,65 @@
 separator: " | "
+
+symbol_lists:
+  - name: sound
+    symbols: ["", "", "", "", "", "", "", "", "", "", "", "", "", ""]
+
 blocks:
-  - name: sound_volume
+  - name: sound
     interval: 5
     interpreter: awk -e
     script: |
       BEGIN {
-          cmd = "pactl get-sink-volume @DEFAULT_SINK@"
-          while ((cmd | getline sink) > 0) {
-              # Split the line by spaces
-              split(sink, parts, " ")
+          cmd = "pactl get-sink-mute @DEFAULT_SINK@"
+          while ((cmd | getline mute) > 0) {
+              if (mute ~ /Mute: yes/) {
+                  cmd = "pactl get-sink-volume @DEFAULT_SINK@"
+                  while ((cmd | getline sink) > 0) {
+                      # Split the line by spaces
+                      split(sink, parts, " ")
 
-              # Check if the 5th element ends with '%'
-              if (length(parts[5]) > 0 && substr(parts[5], length(parts[5]), 1) == "%") {
-                  print "Volume: " parts[5]
+                      # Check if the 5th element ends with '%'
+                      if (length(parts[5]) > 0 && substr(parts[5], length(parts[5]), 1) == "%") {
+                          print "Muted " parts[5]
+                          exit
+                      }
+                  }
+                  close(cmd)
+                  print "Muted N/A"
+                  exit
+              } else if (mute ~ /Mute: no/) {
+                  cmd = "pactl get-sink-volume @DEFAULT_SINK@"
+                  while ((cmd | getline sink) > 0) {
+                      # Split the line by spaces
+                      split(sink, parts, " ")
+
+                      # Check if the 5th element ends with '%'
+                      if (length(parts[5]) > 0 && substr(parts[5], length(parts[5]), 1) == "%") {
+                          print parts[5]
+                          exit
+                      }
+                  }
+                  close(cmd)
+                  print "N/A"
                   exit
               }
           }
           close(cmd)
-          print "Volume: N/A"
+          print "N/A"
       }
-    format: "{{.Text}}"
-
-  - name: display_status
-    interval: 10
-    interpreter: awk -e
-    script: |
-      BEGIN {
-        cmd = "swaymsg -t get_outputs"
-        outputs_json = ""
-        while ((cmd | getline line) > 0) {
-          outputs_json = outputs_json line
-        }
-        close(cmd)
-
-        connected = 0
-        output_names = ""
-        while (match(outputs_json, /"name":"([^"]+)".*?"active":(true|false)/, matches)) {
-          output_names = output_names matches[1] " (" (matches[2] == "true" ? "active" : "inactive") ") "
-          outputs_json = substr(outputs_json, RSTART + RLENGTH)
-          connected++
-        }
-
-        if (connected > 0) {
-          print "Displays: " output_names
-        } else {
-          print "Displays: None"
-        }
-      }
-    format: "{{.Text}}"
+    format: |
+      {{- $text := .Text -}}
+      {{- if hasPrefix "Muted" $text -}}
+        🔇 Volume: {{ trimPrefix "Muted " $text }}
+      {{- else if eq $text "N/A" -}}
+        󰢉
+      {{- else -}}
+        {{ Symbol $text "sound" }} Volume: {{ $text }}
+      {{- end -}}
+    on_click:
+      interpreter: sh -c
+      script: |
+        pactl set-sink-mute @DEFAULT_SINK@ toggle
 
   - name: memory_usage
     interval: 10
@@ -143,5 +155,3 @@ blocks:
       {{- $rx := trimSuffix "Mb" $parts._1 -}}
       {{- $tx := trimSuffix "Mb" $parts._3 -}}
       ↓{{$rx}}Mb ↑{{$tx}}Mb
-    #{{- if ne $rx "0.00" }}↓{{$rx}}Mb {{ end -}}
-    #{{- if ne $tx "0.00" }}↑{{$tx}}Mb{{- end -}}
