@@ -5,6 +5,7 @@ go 1.23.2
 require (
 	github.com/Masterminds/sprig/v3 v3.3.0
 	github.com/goccy/go-yaml v1.15.7
+	github.com/open2b/scriggo v0.58.0
 	github.com/traefik/yaegi v0.16.1
 )
 
@@ -19,4 +20,5 @@ require (
 	github.com/shopspring/decimal v1.4.0 // indirect
 	github.com/spf13/cast v1.7.0 // indirect
 	golang.org/x/crypto v0.30.0 // indirect
+	gopkg.in/yaml.v3 v3.0.1 // indirect
 )

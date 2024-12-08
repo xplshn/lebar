@@ -3,6 +3,8 @@ separator: " | "
 symbol_lists:
   - name: sound
     symbols: ["", "", "", "", "", "", "", "", "", "", "", "", "", ""]
+  - name: clocks
+    symbols: ["🕛", "🕐", "🕑", "🕒", "🕓", "🕔", "🕕", "🕖", "🕗", "🕘", "🕙", "🕚"]
 
 blocks:
   - name: sound
@@ -50,11 +52,11 @@ blocks:
     format: |
       {{- $text := .Text -}}
       {{- if hasPrefix "Muted" $text -}}
-        🔇 Volume: {{ trimPrefix "Muted " $text }}
+        🔇 {{ trimPrefix "Muted " $text }}
       {{- else if eq $text "N/A" -}}
         󰢉
       {{- else -}}
-        {{ Symbol $text "sound" }} Volume: {{ $text }}
+        {{ Symbol $text "sound" }} {{ $text }}
       {{- end -}}
     on_click:
       interpreter: sh -c
@@ -75,7 +77,7 @@ blocks:
         used_percent = (used / total) * 100
         printf "%d/%dMB %.2f\n", used/1024, total/1024, used_percent
       }
-    format: '{{ $a := splitn " " 2 .Text }}{{Symbol $a._1 }} {{ $a._0 }}'
+    format: '{{ $a := splitn " " 2 .Text }}{{Symbol $a._1 }}{{ $a._0 }}'
 
   - name: cpu_usage
     interval: 1
@@ -103,7 +105,7 @@ blocks:
           # Print the CPU usage percentage
           printf "%.1f%\n", pct
       }
-    format: "{{Symbol .Text}} CPU: {{.Text}}"
+    format: "{{Symbol .Text}}CPU: {{.Text}}"
 
   - name: network_transit
     interval: 1
@@ -151,7 +153,26 @@ blocks:
           printf "Rx: %.2fMb Tx: %.2fMb\n", rx_mbits, tx_mbits
       }
     format: |
-      {{- $parts := split " " .Text -}}
-      {{- $rx := trimSuffix "Mb" $parts._1 -}}
-      {{- $tx := trimSuffix "Mb" $parts._3 -}}
-      ↓{{$rx}}Mb ↑{{$tx}}Mb
+      {{ $parts := split " " .Text -}}
+      {{ $rx := $parts._1 -}}
+      {{ $tx := $parts._3 -}}
+      ↓{{ $tx }} ↑{{ $tx -}}
+
+  - name: date_and_time
+    interval: 5
+    interpreter: awk -e
+    script: |
+      BEGIN {
+        # Get the current time
+        current_time = systime()
+
+        # Format the time as TIME 24HS format + DD/MM/YYYY
+        formatted_time = strftime("%H:%M %d/%m/%Y", current_time)
+
+        # Print the formatted time
+        print formatted_time
+      }
+    format: |
+      {{$parts := split " " .Text}}
+      {{- Symbol (split ":" $parts._0 )._0 "clocks" -}}
+      {{ .Text -}}

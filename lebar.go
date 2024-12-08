@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"io"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -18,11 +19,6 @@ import (
 
 	"github.com/Masterminds/sprig/v3"
 	"github.com/goccy/go-yaml"
-	"github.com/traefik/yaegi/interp"
-	"github.com/traefik/yaegi/stdlib"
-	"github.com/traefik/yaegi/stdlib/syscall"
-	"github.com/traefik/yaegi/stdlib/unrestricted"
-	"github.com/traefik/yaegi/stdlib/unsafe"
 )
 
 // SymbolList represents a named list of symbols
@@ -74,10 +70,36 @@ type Output struct {
 	Markup              string      `json:"markup,omitempty"`
 }
 
+// I3barClickEvent represents a click event
+type I3barClickEvent struct {
+	Name       string      `json:"name"`
+	Instance   string      `json:"instance"`
+	X          int         `json:"x"`
+	Y          int         `json:"y"`
+	Button     eventButton `json:"button"`
+	Event      int         `json:"event"`
+	RelativeX  int         `json:"relative_x"`
+	RelativeY  int         `json:"relative_y"`
+	Width      int         `json:"width"`
+	Height     int         `json:"height"`
+	Scale      float64     `json:"scale,omitempty"`
+}
+
+// eventButton represents a button event
+type eventButton int
+
+const (
+	ButtonLeft       eventButton = 1
+	ButtonMiddle     eventButton = 2
+	ButtonRight      eventButton = 3
+	ButtonScrollUp   eventButton = 4
+	ButtonScrollDown eventButton = 5
+)
+
 var (
 	defaultSymbols        = []string{"🟦", "🟩", "🟨", "🟫", "🟥"}
 	defaultOver100Symbols = []string{"⚠️", "💥", "🆘"}
-	debugLog              *log.Logger
+	logger              *log.Logger
 )
 
 // findSymbolList finds a symbol list by name in the configuration
@@ -88,46 +110,6 @@ func findSymbolList(config Config, name string) []string {
 		}
 	}
 	return nil
-}
-
-// executeYaegi runs a Go script using Yaegi with full initialization
-func executeYaegi(script string) (string, error) {
-    i := interp.New(interp.Options{
-        GoPath:       os.Getenv("GOPATH"),
-        Env:          os.Environ(),
-        Unrestricted: true,
-    })
-
-    // Standard library symbols
-    if err := i.Use(stdlib.Symbols); err != nil {
-        return "", err
-    }
-
-    // Additional symbol sets
-    if err := i.Use(interp.Symbols); err != nil {
-        return "", err
-    }
-
-    // Optional symbol sets (configurable)
-    if err := i.Use(syscall.Symbols); err != nil {
-        return "", err
-    }
-
-    if err := i.Use(unsafe.Symbols); err != nil {
-        return "", err
-    }
-
-    if err := i.Use(unrestricted.Symbols); err != nil {
-        return "", err
-    }
-
-    // Evaluate the script
-    result, err := i.Eval(script)
-    if err != nil {
-        return "", err
-    }
-
-    return fmt.Sprintf("%v", result.Interface()), nil
 }
 
 // executeScript runs a script using the specified interpreter
@@ -146,10 +128,6 @@ func executeScript(ctx context.Context, interpreter, script string) (string, err
 		return "", fmt.Errorf("Interpreter '%s' does not exist", interpreter)
 	}
 
-	if interpreter == "yaegi" {
-		return executeYaegi(script)
-	}
-
 	cmd := exec.CommandContext(ctx, parts[0], append(parts[1:], script)...)
 	cmdOutput, err := cmd.Output()
 	if err != nil {
@@ -161,7 +139,7 @@ func executeScript(ctx context.Context, interpreter, script string) (string, err
 
 // executeBlock runs a block's script using the specified interpreter
 func executeBlock(ctx context.Context, block Block, config Config) (string, error) {
-	debugLog.Println("Executing block:", block.Name)
+	logger.Println("Executing block:", block.Name)
 
 	output, err := executeScript(ctx, block.Interpreter, block.Script)
 	if err != nil {
@@ -288,12 +266,12 @@ func NewEventFromRaw(raw []byte) (*I3barClickEvent, error) {
 		return r != '}'
 	})
 
-	debugLog.Printf("Processed raw input: %s", string(raw))
+	logger.Printf("Processed raw input: %s", string(raw))
 
 	ev := new(I3barClickEvent)
 	if err := json.Unmarshal(raw, ev); err != nil {
-		debugLog.Printf("JSON Unmarshal error: %v", err)
-		debugLog.Printf("Problematic JSON: %s", string(raw))
+		logger.Printf("JSON Unmarshal error: %v", err)
+		logger.Printf("Problematic JSON: %s", string(raw))
 		return nil, fmt.Errorf("failed to parse click event: %v", err)
 	}
 	return ev, nil
@@ -301,45 +279,45 @@ func NewEventFromRaw(raw []byte) (*I3barClickEvent, error) {
 
 // handleClickEvents reads and processes click events from stdin with extensive logging
 func handleClickEvents(config Config) {
-	debugLog.Println("Starting handleClickEvents")
-	defer debugLog.Println("Finished handleClickEvents")
+	logger.Println("Starting handleClickEvents")
+	defer logger.Println("Finished handleClickEvents")
 
 	scanner := bufio.NewScanner(os.Stdin)
 
 	if scanner.Scan() {
-		debugLog.Printf("Initial line: %s\n", scanner.Text())
+		logger.Printf("Initial line: %s\n", scanner.Text())
 	}
 
 	for scanner.Scan() {
 		raw := scanner.Bytes()
-		debugLog.Printf("Raw input line: %s\n", string(raw))
+		logger.Printf("Raw input line: %s\n", string(raw))
 
 		if len(bytes.TrimSpace(raw)) == 0 {
-			debugLog.Println("Skipping empty line")
+			logger.Println("Skipping empty line")
 			continue
 		}
 		if bytes.Equal(raw, []byte(",")) {
-			debugLog.Println("Skipping comma")
+			logger.Println("Skipping comma")
 			continue
 		}
 
 		ev, err := NewEventFromRaw(raw)
 		if err != nil {
-			debugLog.Printf("Error parsing click event: %v\n", err)
+			logger.Printf("Error parsing click event: %v\n", err)
 			continue
 		}
 
 		block := findBlockByName(config, ev.Name)
 		if block == nil {
-			debugLog.Printf("No block found for name: %s\n", ev.Name)
+			logger.Printf("No block found for name: %s\n", ev.Name)
 			continue
 		}
 
-		debugLog.Printf("Matched block: %+v\n", *block)
-		debugLog.Printf("OnClick script: %s\n", block.OnClick.Script)
+		logger.Printf("Matched block: %+v\n", *block)
+		logger.Printf("OnClick script: %s\n", block.OnClick.Script)
 
 		if block.OnClick.Script == "" {
-			debugLog.Printf("No onClick script for block: %s\n", block.Name)
+			logger.Printf("No onClick script for block: %s\n", block.Name)
 			continue
 		}
 
@@ -347,7 +325,7 @@ func handleClickEvents(config Config) {
 		if interpreter == "" {
 			interpreter = block.Interpreter
 		}
-		debugLog.Printf("Using interpreter: %s\n", interpreter)
+		logger.Printf("Using interpreter: %s\n", interpreter)
 
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
@@ -364,20 +342,20 @@ func handleClickEvents(config Config) {
 			}
 		}()
 
-		debugLog.Printf("Executing OnClick script for block: %s\n", block.Name)
-		debugLog.Printf("OnClick script details: %+v\n", block.OnClick)
+		logger.Printf("Executing OnClick script for block: %s\n", block.Name)
+		logger.Printf("OnClick script details: %+v\n", block.OnClick)
 
 		output, err := executeScript(ctx, interpreter, block.OnClick.Script)
 		if err != nil {
-			debugLog.Printf("Error executing OnClick script for block %s: %v\n", block.Name, err)
+			logger.Printf("Error executing OnClick script for block %s: %v\n", block.Name, err)
 			fmt.Fprintf(os.Stderr, "Error executing OnClick script: %v\n", err)
 		} else {
-			debugLog.Printf("OnClick script output for block %s: %s\n", block.Name, output)
+			logger.Printf("OnClick script output for block %s: %s\n", block.Name, output)
 		}
 	}
 
 	if err := scanner.Err(); err != nil {
-		debugLog.Printf("Error reading stdin: %v\n", err)
+		logger.Printf("Error reading stdin: %v\n", err)
 	}
 }
 
@@ -409,31 +387,18 @@ func findBlockByName(config Config, name string) *Block {
 	return nil
 }
 
-// I3barClickEvent represents a click event
-type I3barClickEvent struct {
-	Name       string      `json:"name"`
-	Instance   string      `json:"instance"`
-	X          int         `json:"x"`
-	Y          int         `json:"y"`
-	Button     eventButton `json:"button"`
-	Event      int         `json:"event"`
-	RelativeX  int         `json:"relative_x"`
-	RelativeY  int         `json:"relative_y"`
-	Width      int         `json:"width"`
-	Height     int         `json:"height"`
-	Scale      float64     `json:"scale,omitempty"`
+// initLogger initializes the logger based on LEBAR_DEBUG environment variable
+func initLogger(logFile *os.File) *log.Logger {
+	debugMode, _ := strconv.ParseBool(os.Getenv("LEBAR_DEBUG"))
+	
+	// If debug mode is not set or false, discard logs
+	if !debugMode {
+		return log.New(io.Discard, "", 0)
+	}
+
+	// If debug mode is true, log to file with standard formatting
+	return log.New(logFile, "DEBUG: ", log.LstdFlags|log.Lmicroseconds)
 }
-
-// eventButton represents a button event
-type eventButton int
-
-const (
-	ButtonLeft       eventButton = 1
-	ButtonMiddle     eventButton = 2
-	ButtonRight      eventButton = 3
-	ButtonScrollUp   eventButton = 4
-	ButtonScrollDown eventButton = 5
-)
 
 func main() {
 	logFile, err := os.OpenFile("/tmp/lebar.log", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
@@ -442,8 +407,8 @@ func main() {
 	}
 	defer logFile.Close()
 
-	logger := log.New(logFile, "INFO: ", log.LstdFlags|log.Lmicroseconds)
-	debugLog = log.New(logFile, "DEBUG: ", log.LstdFlags|log.Lmicroseconds)
+	// Initialize logger using environment variable
+	logger = initLogger(logFile)
 
 	if len(os.Args) < 2 {
 		logger.Println("Usage: lebar <config>")
