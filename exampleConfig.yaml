@@ -126,7 +126,7 @@ blocks:
           return "0,0"
       }
       BEGIN {
-          interface = "wlan0"  # Change this if using a different interface
+          interface = "eth0" # Change this if using a different interface
           file = "/proc/net/dev"
           
           # Get initial rx and tx bytes
