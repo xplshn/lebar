@@ -5,7 +5,6 @@ import (
 	"io"
 	"bytes"
 	"context"
-	"encoding/json"
 	"fmt"
 	"log"
 	"math"
@@ -13,12 +12,13 @@ import (
 	"os/exec"
 	"strconv"
 	"strings"
-	"text/template"
 	"time"
 	"unicode"
+	"text/template"
 
-	"github.com/Masterminds/sprig/v3"
-	"github.com/goccy/go-yaml"
+	"github.com/Masterminds/sprig/v3" // TEMPLATE FUNCTIONS
+	"github.com/goccy/go-json" // IO
+	"github.com/goccy/go-yaml" // CFG
 )
 
 // SymbolList represents a named list of symbols
