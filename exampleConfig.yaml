@@ -126,7 +126,7 @@ blocks:
           return "0,0"
       }
       BEGIN {
-          interface = "eth0" # Change this if using a different interface
+          interface = "eth0"  # Change this if using a different interface
           file = "/proc/net/dev"
           
           # Get initial rx and tx bytes
@@ -174,5 +174,5 @@ blocks:
       }
     format: |
       {{$parts := split " " .Text}}
-      {{- Symbol (split ":" $parts._0 )._0 "clocks" -}}
+      {{- Symbol (split ":" $parts._0 )._0 "clocks" 0.1 -}}
       {{ .Text -}}

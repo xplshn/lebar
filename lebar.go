@@ -149,70 +149,97 @@ func executeBlock(ctx context.Context, block Block, config Config) (string, erro
 	text := strings.TrimSpace(output)
 	if block.Format != "" {
 		tmpl, err := template.New("format").Funcs(template.FuncMap{
-			"Symbol": func(args ...interface{}) string {
-				if len(args) < 1 {
-					return ""
-				}
-
-				var number float64
-				strVal := fmt.Sprintf("%v", args[0])
-				strVal = strings.TrimSpace(strings.TrimSuffix(strVal, "%"))
-				num, err := strconv.ParseFloat(strVal, 64)
-				if err != nil {
-					return "?"
-				}
-				number = num
-
-				symbolList := defaultSymbols
-				over100SymbolList := defaultOver100Symbols
-
-				if len(args) > 1 {
-					switch arg := args[1].(type) {
-					case string:
-						customSymbolList := findSymbolList(config, arg)
-						if customSymbolList != nil {
-							symbolList = customSymbolList
-						}
-					case []string:
-						if len(arg) > 0 {
-							symbolList = arg
-						}
-					}
-				}
-				if len(args) > 2 {
-					switch arg := args[2].(type) {
-					case string:
-						customOver100SymbolList := findSymbolList(config, arg)
-						if customOver100SymbolList != nil {
-							over100SymbolList = customOver100SymbolList
-						}
-					case []string:
-						if len(arg) > 0 {
-							over100SymbolList = arg
-						}
-					}
-				}
-
-				if len(symbolList) == 0 {
-					symbolList = defaultSymbols
-				}
-				if len(over100SymbolList) == 0 {
-					over100SymbolList = defaultOver100Symbols
-				}
-
-				if number <= 100 {
-					numSymbols := len(symbolList)
-					index := int((number / 100) * float64(numSymbols-1))
-					return symbolList[index]
-				} else {
-					numSymbols := len(over100SymbolList)
-					index := int(math.Min(float64(numSymbols-1), (number/100)*float64(numSymbols-1)))
-					return over100SymbolList[index]
-				}
-			},
+		    "Symbol": func(args ...interface{}) string {
+		        if len(args) < 1 {
+		            return ""
+		        }
+		
+		        // Parse the first (mandatory) argument
+		        var number float64
+		        strVal := fmt.Sprintf("%v", args[0])
+		        strVal = strings.TrimSpace(strings.TrimSuffix(strVal, "%"))
+		        num, err := strconv.ParseFloat(strVal, 64)
+		        if err != nil {
+		            return "?"
+		        }
+		        number = num
+		
+		        // Set default values
+		        symbolList := defaultSymbols
+		        over100SymbolList := defaultOver100Symbols
+		        scale := 1.0 // Default scale is 1 (no scaling)
+		
+		        // Parse the second (optional) argument: custom symbol list
+		        if len(args) > 1 {
+		            switch arg := args[1].(type) {
+		            case []string:
+		                if len(arg) > 0 {
+		                    symbolList = arg
+		                }
+		            case string:
+		                customSymbolList := findSymbolList(config, arg)
+		                if customSymbolList != nil {
+		                    symbolList = customSymbolList
+		                }
+		            }
+		        }
+		
+		        // Parse the third (optional) argument: custom over-100% symbol list or scale
+		        if len(args) > 2 {
+		            switch arg := args[2].(type) {
+		            case []string:
+		                if len(arg) > 0 {
+		                    over100SymbolList = arg
+		                }
+		            case string:
+		                customOver100SymbolList := findSymbolList(config, arg)
+		                if customOver100SymbolList != nil {
+		                    over100SymbolList = customOver100SymbolList
+		                } else {
+		                    // If it's not a symbol list name, treat it as scale
+		                    if scaleArg, err := strconv.ParseFloat(arg, 64); err == nil && scaleArg > 0 {
+		                        scale = scaleArg
+		                    }
+		                }
+		            case float64:
+		                if arg > 0 {
+		                    scale = arg
+		                }
+		            }
+		        }
+		
+		        // Parse the fourth (optional) argument: scale (if not already set)
+		        if len(args) > 3 {
+		            if scaleArg, ok := args[3].(float64); ok && scaleArg > 0 {
+		                scale = scaleArg
+		            }
+		        }
+		
+		        // Validate and adjust lists if needed
+		        if len(symbolList) == 0 {
+		            symbolList = defaultSymbols
+		        }
+		        if len(over100SymbolList) == 0 {
+		            over100SymbolList = defaultOver100Symbols
+		        }
+		
+		        // Apply scale to the number
+		        scaledNumber := number / scale
+		
+		        // Determine the appropriate symbol
+		        if scaledNumber <= 100 {
+		            numSymbols := len(symbolList)
+		            index := int((scaledNumber / 100) * float64(numSymbols-1))
+		            return symbolList[index]
+		        } else {
+		            numSymbols := len(over100SymbolList)
+		            index := int(math.Min(float64(numSymbols-1), (scaledNumber/100)*float64(numSymbols-1)))
+		            return over100SymbolList[index]
+		        }
+		    },
 		}).Funcs(sprig.TxtFuncMap()).Parse(block.Format)
 		if err != nil {
-			return "", err
+		    return "", err
 		}
 
 		data := map[string]interface{}{
