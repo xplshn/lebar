@@ -1,3 +1,4 @@
+# Same as the other config, except for Pipewire / Pulseaudio setups
 separator: " | "
 
 symbol_lists:
@@ -10,28 +11,42 @@ blocks:
     interpreter: awk -e
     script: |
       BEGIN {
-          # ALSA command to get master volume and mute status
-          cmd = "amixer sget Master"
-          while ((cmd | getline line) > 0) {
-              if (line ~ /\[off\]/) {
-                  muted = "yes"
-              } else if (line ~ /\[on\]/) {
-                  muted = "no"
-              }
+          cmd = "pactl get-sink-mute @DEFAULT_SINK@"
+          while ((cmd | getline mute) > 0) {
+              if (mute ~ /Mute: yes/) {
+                  cmd = "pactl get-sink-volume @DEFAULT_SINK@"
+                  while ((cmd | getline sink) > 0) {
+                      # Split the line by spaces
+                      split(sink, parts, " ")
 
-              # Extract volume percentage
-              if (line ~ /dB/) {
-                  split(line, arr, "[][]")
-                  volume = arr[2]
+                      # Check if the 5th element ends with '%'
+                      if (length(parts[5]) > 0 && substr(parts[5], length(parts[5]), 1) == "%") {
+                          print "Muted " parts[5]
+                          exit
+                      }
+                  }
+                  close(cmd)
+                  print "Muted N/A"
+                  exit
+              } else if (mute ~ /Mute: no/) {
+                  cmd = "pactl get-sink-volume @DEFAULT_SINK@"
+                  while ((cmd | getline sink) > 0) {
+                      # Split the line by spaces
+                      split(sink, parts, " ")
+
+                      # Check if the 5th element ends with '%'
+                      if (length(parts[5]) > 0 && substr(parts[5], length(parts[5]), 1) == "%") {
+                          print parts[5]
+                          exit
+                      }
+                  }
+                  close(cmd)
+                  print "N/A"
+                  exit
               }
           }
           close(cmd)
-
-          if (muted == "yes") {
-              print "Muted " volume
-          } else {
-              print volume
-          }
+          print "N/A"
       }
     output:
       full_text: |
@@ -39,17 +54,17 @@ blocks:
         {{- if hasPrefix "Muted" $text -}}
           🔇 {{ trimPrefix "Muted " $text }}
         {{- else if eq $text "N/A" -}}
-          󰟦
+          󰢉
         {{- else -}}
           {{ Symbol $text "sound" }} {{ $text }}
         {{- end -}}
     mouse_events:
       Left:
-        command: 'amixer set Master toggle'
+        command: 'pactl set-sink-mute @DEFAULT_SINK@ toggle'
       ScrollUp:
-        command: 'amixer set Master 2%+'
+          command: 'pactl set-sink-volume @DEFAULT_SINK@ +2%'
       ScrollDown:
-        command: 'amixer set Master 2%-'
+        command: 'pactl set-sink-volume @DEFAULT_SINK@ -2%'
 
   - name: memory_usage
     interval: 10
@@ -164,5 +179,4 @@ blocks:
         print formatted_time
       }
     output:
-      full_text: |
-        {{ .Text -}}
+      full_text: '{{ .Text -}}'

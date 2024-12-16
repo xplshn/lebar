@@ -2,23 +2,24 @@ package main
 
 import (
 	"bufio"
-	"io"
 	"bytes"
 	"context"
 	"fmt"
+	"io"
 	"log"
 	"math"
 	"os"
 	"os/exec"
+	"reflect"
 	"strconv"
 	"strings"
+	"text/template"
 	"time"
 	"unicode"
-	"text/template"
 
 	"github.com/Masterminds/sprig/v3" // TEMPLATE FUNCTIONS
-	"github.com/goccy/go-json" // IO
-	"github.com/goccy/go-yaml" // CFG
+	"github.com/goccy/go-json"        // IO
+	"github.com/goccy/go-yaml"        // CFG
 )
 
 // SymbolList represents a named list of symbols
@@ -39,20 +40,25 @@ type Config struct {
 
 // Block defines a status bar module
 type Block struct {
-	Name        string `yaml:"name"`
-	Interval    int    `yaml:"interval"`
+	Name        string                `yaml:"name"`
+	Interval    int                   `yaml:"interval"`
+	Interpreter string                `yaml:"interpreter"`
+	Script      string                `yaml:"script"`
+	Command     string                `yaml:"command"`
+	Output      Output                `yaml:"output"`
+	MouseEvents map[string]MouseEvent `yaml:"mouse_events"`
+}
+
+// MouseEvent defines a mouse event handler
+type MouseEvent struct {
 	Interpreter string `yaml:"interpreter"`
 	Script      string `yaml:"script"`
-	Format      string `json:"format"`
-	OnClick     struct {
-		Interpreter string `yaml:"interpreter"`
-		Script      string `yaml:"script"`
-	} `yaml:"on_click"`
+	Command     string `yaml:"command"`
 }
 
 // Output represents a bar item
 type Output struct {
-	Name                string      `json:"name"`
+	Name                string      `json:"name,omitempty"`
 	FullText            string      `json:"full_text"`
 	ShortText           string      `json:"short_text,omitempty"`
 	Color               string      `json:"color,omitempty"`
@@ -72,17 +78,17 @@ type Output struct {
 
 // I3barClickEvent represents a click event
 type I3barClickEvent struct {
-	Name       string      `json:"name"`
-	Instance   string      `json:"instance"`
-	X          int         `json:"x"`
-	Y          int         `json:"y"`
-	Button     eventButton `json:"button"`
-	Event      int         `json:"event"`
-	RelativeX  int         `json:"relative_x"`
-	RelativeY  int         `json:"relative_y"`
-	Width      int         `json:"width"`
-	Height     int         `json:"height"`
-	Scale      float64     `json:"scale,omitempty"`
+	Name      string      `json:"name"`
+	Instance  string      `json:"instance"`
+	X         int         `json:"x"`
+	Y         int         `json:"y"`
+	Button    eventButton `json:"button"`
+	Event     int         `json:"event"`
+	RelativeX int         `json:"relative_x"`
+	RelativeY int         `json:"relative_y"`
+	Width     int         `json:"width"`
+	Height    int         `json:"height"`
+	Scale     float64     `json:"scale,omitempty"`
 }
 
 // eventButton represents a button event
@@ -99,7 +105,7 @@ const (
 var (
 	defaultSymbols        = []string{"🟦", "🟩", "🟨", "🟫", "🟥"}
 	defaultOver100Symbols = []string{"⚠️", "💥", "🆘"}
-	logger              *log.Logger
+	logger                *log.Logger
 )
 
 // findSymbolList finds a symbol list by name in the configuration
@@ -137,123 +143,165 @@ func executeScript(ctx context.Context, interpreter, script string) (string, err
 	return strings.TrimSpace(string(cmdOutput)), nil
 }
 
-// executeBlock runs a block's script using the specified interpreter
-func executeBlock(ctx context.Context, block Block, config Config) (string, error) {
-	logger.Println("Executing block:", block.Name)
+// executeCommand runs a command
+func executeCommand(ctx context.Context, command string) (string, error) {
+	if command == "" {
+		return "", fmt.Errorf("Command not specified")
+	}
 
-	output, err := executeScript(ctx, block.Interpreter, block.Script)
+	parts := strings.Fields(command)
+	if len(parts) == 0 {
+		return "", fmt.Errorf("Command format is invalid")
+	}
+
+	cmd := exec.CommandContext(ctx, parts[0], parts[1:]...)
+	cmdOutput, err := cmd.Output()
 	if err != nil {
 		return "", err
 	}
 
-	text := strings.TrimSpace(output)
-	if block.Format != "" {
-		tmpl, err := template.New("format").Funcs(template.FuncMap{
-		    "Symbol": func(args ...interface{}) string {
-		        if len(args) < 1 {
-		            return ""
-		        }
-		
-		        // Parse the first (mandatory) argument
-		        var number float64
-		        strVal := fmt.Sprintf("%v", args[0])
-		        strVal = strings.TrimSpace(strings.TrimSuffix(strVal, "%"))
-		        num, err := strconv.ParseFloat(strVal, 64)
-		        if err != nil {
-		            return "?"
-		        }
-		        number = num
-		
-		        // Set default values
-		        symbolList := defaultSymbols
-		        over100SymbolList := defaultOver100Symbols
-		        scale := 1.0 // Default scale is 1 (no scaling)
-		
-		        // Parse the second (optional) argument: custom symbol list
-		        if len(args) > 1 {
-		            switch arg := args[1].(type) {
-		            case []string:
-		                if len(arg) > 0 {
-		                    symbolList = arg
-		                }
-		            case string:
-		                customSymbolList := findSymbolList(config, arg)
-		                if customSymbolList != nil {
-		                    symbolList = customSymbolList
-		                }
-		            }
-		        }
-		
-		        // Parse the third (optional) argument: custom over-100% symbol list or scale
-		        if len(args) > 2 {
-		            switch arg := args[2].(type) {
-		            case []string:
-		                if len(arg) > 0 {
-		                    over100SymbolList = arg
-		                }
-		            case string:
-		                customOver100SymbolList := findSymbolList(config, arg)
-		                if customOver100SymbolList != nil {
-		                    over100SymbolList = customOver100SymbolList
-		                } else {
-		                    // If it's not a symbol list name, treat it as scale
-		                    if scaleArg, err := strconv.ParseFloat(arg, 64); err == nil && scaleArg > 0 {
-		                        scale = scaleArg
-		                    }
-		                }
-		            case float64:
-		                if arg > 0 {
-		                    scale = arg
-		                }
-		            }
-		        }
-		
-		        // Parse the fourth (optional) argument: scale (if not already set)
-		        if len(args) > 3 {
-		            if scaleArg, ok := args[3].(float64); ok && scaleArg > 0 {
-		                scale = scaleArg
-		            }
-		        }
-		
-		        // Validate and adjust lists if needed
-		        if len(symbolList) == 0 {
-		            symbolList = defaultSymbols
-		        }
-		        if len(over100SymbolList) == 0 {
-		            over100SymbolList = defaultOver100Symbols
-		        }
-		
-		        // Apply scale to the number
-		        scaledNumber := number / scale
-		
-		        // Determine the appropriate symbol
-		        if scaledNumber <= 100 {
-		            numSymbols := len(symbolList)
-		            index := int((scaledNumber / 100) * float64(numSymbols-1))
-		            return symbolList[index]
-		        } else {
-		            numSymbols := len(over100SymbolList)
-		            index := int(math.Min(float64(numSymbols-1), (scaledNumber/100)*float64(numSymbols-1)))
-		            return over100SymbolList[index]
-		        }
-		    },
-		}).Funcs(sprig.TxtFuncMap()).Parse(block.Format)
-		if err != nil {
-		    return "", err
-		}
+	return strings.TrimSpace(string(cmdOutput)), nil
+}
 
-		data := map[string]interface{}{
-			"Text": text,
-		}
+// executeBlock runs a block's script using the specified interpreter or command
+func executeBlock(ctx context.Context, block Block, config Config) (Output, error) {
+	logger.Println("Executing block:", block.Name)
 
-		var buf strings.Builder
-		if err := tmpl.Execute(&buf, data); err != nil {
-			return "", err
-		}
-		text = buf.String()
+	var outputText string
+	var err error
+
+	if block.Command != "" {
+		outputText, err = executeCommand(ctx, block.Command)
+	} else {
+		outputText, err = executeScript(ctx, block.Interpreter, block.Script)
 	}
 
-	return text, nil
+	if err != nil {
+		return Output{}, err
+	}
+
+	text := strings.TrimSpace(outputText)
+	output := block.Output
+
+	// Ensure the name is set by lebar
+	if output.Name != "" {
+		return Output{}, fmt.Errorf("User should not specify the 'name' field in the output")
+	}
+	output.Name = block.Name
+
+	// Prepare the template function map with sprig and Symbol
+	tmplFuncs := sprig.TxtFuncMap()
+	tmplFuncs["Symbol"] = func(args ...interface{}) string {
+		if len(args) < 1 {
+			return ""
+		}
+
+		// Parse the first argument (mandatory)
+		var number float64
+		strVal := fmt.Sprintf("%v", args[0])
+		strVal = strings.TrimSpace(strings.TrimSuffix(strVal, "%"))
+		num, err := strconv.ParseFloat(strVal, 64)
+		if err != nil {
+			return "?"
+		}
+		number = num
+
+		// Set default values
+		symbolList := defaultSymbols
+		over100SymbolList := defaultOver100Symbols
+		scale := 1.0 // Default scale is 1 (no scaling)
+
+		// Parse optional arguments
+		if len(args) > 1 {
+			switch arg := args[1].(type) {
+			case []string:
+				if len(arg) > 0 {
+					symbolList = arg
+				}
+			case string:
+				customSymbolList := findSymbolList(config, arg)
+				if customSymbolList != nil {
+					symbolList = customSymbolList
+				}
+			}
+		}
+		if len(args) > 2 {
+			switch arg := args[2].(type) {
+			case []string:
+				if len(arg) > 0 {
+					over100SymbolList = arg
+				}
+			case string:
+				customOver100SymbolList := findSymbolList(config, arg)
+				if customOver100SymbolList != nil {
+					over100SymbolList = customOver100SymbolList
+				} else if scaleArg, err := strconv.ParseFloat(arg, 64); err == nil && scaleArg > 0 {
+					scale = scaleArg
+				}
+			case float64:
+				if arg > 0 {
+					scale = arg
+				}
+			}
+		}
+		if len(args) > 3 {
+			if scaleArg, ok := args[3].(float64); ok && scaleArg > 0 {
+				scale = scaleArg
+			}
+		}
+
+		// Validate lists
+		if len(symbolList) == 0 {
+			symbolList = defaultSymbols
+		}
+		if len(over100SymbolList) == 0 {
+			over100SymbolList = defaultOver100Symbols
+		}
+
+		// Apply scale and determine symbol
+		scaledNumber := number / scale
+		if scaledNumber <= 100 {
+			index := int((scaledNumber / 100) * float64(len(symbolList)-1))
+			return symbolList[index]
+		} else {
+			index := int(math.Min(float64(len(over100SymbolList)-1), (scaledNumber/100)*float64(len(over100SymbolList)-1)))
+			return over100SymbolList[index]
+		}
+	}
+
+	// Prepare the data context for templates
+	data := map[string]interface{}{
+		"Text":   text,
+		"Config": config,
+	}
+
+	// Dynamically apply templates to Output fields
+	outputValue := reflect.ValueOf(&output).Elem()
+	outputType := outputValue.Type()
+
+	for i := 0; i < outputType.NumField(); i++ {
+		field := outputType.Field(i)
+		fieldValue := outputValue.Field(i)
+
+		if fieldValue.Kind() == reflect.String && fieldValue.CanSet() {
+			fieldTemplate := fieldValue.String()
+			if fieldTemplate != "" {
+				tmpl, err := template.New(field.Name).Funcs(tmplFuncs).Parse(fieldTemplate)
+				if err != nil {
+					return Output{}, fmt.Errorf("failed to parse template for field %s: %w", field.Name, err)
+				}
+
+				var buf strings.Builder
+				if err := tmpl.Execute(&buf, data); err != nil {
+					return Output{}, fmt.Errorf("failed to execute template for field %s: %w", field.Name, err)
+				}
+
+				fieldValue.SetString(buf.String())
+			}
+		}
+	}
+
+	return output, nil
 }
 
 // runBlocks executes configured blocks
@@ -264,17 +312,12 @@ func runBlocks(config Config) ([]Output, error) {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 
-		text, err := executeBlock(ctx, block, config)
+		output, err := executeBlock(ctx, block, config)
 		if err != nil {
 			return nil, err
 		}
 
-		outputs = append(outputs, Output{
-			Name:                block.Name,
-			FullText:            text,
-			Separator:           true,
-			SeparatorBlockWidth: 9,
-		})
+		outputs = append(outputs, output)
 	}
 
 	return outputs, nil
@@ -341,14 +384,22 @@ func handleClickEvents(config Config) {
 		}
 
 		logger.Printf("Matched block: %+v\n", *block)
-		logger.Printf("OnClick script: %s\n", block.OnClick.Script)
 
-		if block.OnClick.Script == "" {
-			logger.Printf("No onClick script for block: %s\n", block.Name)
+		eventName := ev.Button.String()
+		mouseEvent, exists := block.MouseEvents[eventName]
+		if !exists {
+			logger.Printf("No mouse event handler for %s on block: %s\n", eventName, block.Name)
 			continue
 		}
 
-		interpreter := block.OnClick.Interpreter
+		logger.Printf("Mouse event script: %s\n", mouseEvent.Script)
+
+		if mouseEvent.Script == "" && mouseEvent.Command == "" {
+			logger.Printf("No mouse event script or command for block: %s\n", block.Name)
+			continue
+		}
+
+		interpreter := mouseEvent.Interpreter
 		if interpreter == "" {
 			interpreter = block.Interpreter
 		}
@@ -369,15 +420,22 @@ func handleClickEvents(config Config) {
 			}
 		}()
 
-		logger.Printf("Executing OnClick script for block: %s\n", block.Name)
-		logger.Printf("OnClick script details: %+v\n", block.OnClick)
+		logger.Printf("Executing mouse event script for block: %s\n", block.Name)
+		logger.Printf("Mouse event script details: %+v\n", mouseEvent)
 
-		output, err := executeScript(ctx, interpreter, block.OnClick.Script)
-		if err != nil {
-			logger.Printf("Error executing OnClick script for block %s: %v\n", block.Name, err)
-			fmt.Fprintf(os.Stderr, "Error executing OnClick script: %v\n", err)
+		var output string
+
+		if mouseEvent.Command != "" {
+			output, err = executeCommand(ctx, mouseEvent.Command)
 		} else {
-			logger.Printf("OnClick script output for block %s: %s\n", block.Name, output)
+			output, err = executeScript(ctx, interpreter, mouseEvent.Script)
+		}
+
+		if err != nil {
+			logger.Printf("Error executing mouse event script for block %s: %v\n", block.Name, err)
+			fmt.Fprintf(os.Stderr, "Error executing mouse event script: %v\n", err)
+		} else {
+			logger.Printf("Mouse event script output for block %s: %s\n", block.Name, output)
 		}
 	}
 
@@ -414,28 +472,20 @@ func findBlockByName(config Config, name string) *Block {
 	return nil
 }
 
-// initLogger initializes the logger based on LEBAR_DEBUG environment variable
-func initLogger(logFile *os.File) *log.Logger {
-	debugMode, _ := strconv.ParseBool(os.Getenv("LEBAR_DEBUG"))
-	
-	// If debug mode is not set or false, discard logs
-	if !debugMode {
-		return log.New(io.Discard, "", 0)
-	}
-
-	// If debug mode is true, log to file with standard formatting
-	return log.New(logFile, "DEBUG: ", log.LstdFlags|log.Lmicroseconds)
-}
-
 func main() {
-	logFile, err := os.OpenFile("/tmp/lebar.log", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
-	if err != nil {
-		log.Fatalf("Failed to open debug file: %v", err)
+	debugMode, _ := strconv.ParseBool(os.Getenv("LEBAR_DEBUG"))
+	var logFile *os.File
+	if debugMode {
+		var err error
+		logFile, err = os.OpenFile("/tmp/lebar.log", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+		if err != nil {
+			log.Fatalf("Failed to open debug file: %v", err)
+		}
+		defer logFile.Close()
+		logger = log.New(logFile, "DEBUG: ", log.LstdFlags|log.Lmicroseconds)
+	} else {
+		logger = log.New(io.Discard, "", 0)
 	}
-	defer logFile.Close()
-
-	// Initialize logger using environment variable
-	logger = initLogger(logFile)
 
 	if len(os.Args) < 2 {
 		logger.Println("Usage: lebar <config>")
@@ -460,7 +510,7 @@ func main() {
 
 	config.ClickEvents = false
 	for _, block := range config.Blocks {
-		if block.OnClick.Script != "" {
+		if len(block.MouseEvents) > 0 {
 			config.ClickEvents = true
 			break
 		}
