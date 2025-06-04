@@ -5,7 +5,7 @@ go 1.23.2
 require (
 	github.com/Masterminds/sprig/v3 v3.3.0
 	github.com/goccy/go-json v0.10.5
-	github.com/goccy/go-yaml v1.17.1
+	github.com/goccy/go-yaml v1.18.0
 )
 
 require (

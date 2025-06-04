@@ -3,11 +3,42 @@ separator: " | "
 symbol_lists:
   - name: sound
     symbols: ["", "", "", "", "", "", "", "", "", "", "", "", "", ""]
+  - name: battery
+    symbols: ["󰂎", "󰁺", "󰁻", "󰁼", "󰁽", "󰁾", "󰁿", "󰂀", "󰂁", "󰂂", "󰁹"]
 
 blocks:
+  - name: battery
+    interval: 2
+    interpreter: mawk
+    script: |
+      BEGIN {
+        capacity_file = "/sys/class/power_supply/BAT0/capacity"
+        status_file = "/sys/class/power_supply/BAT0/status"
+
+        getline capacity < capacity_file
+        close(capacity_file)
+
+        getline status < status_file
+        close(status_file)
+
+        if (status == "Charging") {
+          print "⚡ " capacity "%"
+        } else {
+          print capacity "%"
+        }
+      }
+    output:
+      full_text: |
+        {{- $text := .Text -}}
+        {{- if hasPrefix "⚡" $text -}}
+          {{ $text }}
+        {{- else -}}
+          {{ Symbol $text "battery" }} {{ $text }}
+        {{- end -}}
+
   - name: sound
     interval: 5
-    interpreter: awk -e
+    interpreter: mawk
     script: |
       BEGIN {
           # ALSA command to get master volume and mute status
@@ -53,7 +84,7 @@ blocks:
 
   - name: memory_usage
     interval: 10
-    interpreter: awk -e
+    interpreter: mawk
     script: |
       BEGIN {
         while ((getline < "/proc/meminfo") > 0) {
@@ -99,7 +130,7 @@ blocks:
 
   - name: network_transit
     interval: 1
-    interpreter: awk -e
+    interpreter: mawk
     script: |
       # Function to get rx and tx bytes
       function get_bytes(interface, file, result) {
@@ -107,16 +138,16 @@ blocks:
               if (line ~ interface ":") {
                   split(line, a, ":")
                   split(a[2], b, " ")
-                  result = b[1] "," b[9]  # rx and tx bytes
-                  close(file)  # Close the file after use
+                  result = b[1] "," b[9]
+                  close(file)
                   return result
               }
           }
-          close(file)  # Ensure the file is closed if not found
+          close(file) 
           return "0,0"
       }
       BEGIN {
-          interface = "eth0"  # Change this if using a different interface
+          interface = "eth0"
           file = "/proc/net/dev"
 
           # Get initial rx and tx bytes
@@ -124,7 +155,6 @@ blocks:
           rx_bytes_initial = initial[1] + 0  # Ensure numeric
           tx_bytes_initial = initial[2] + 0  # Ensure numeric
 
-          # Sleep for 1 second
           system("sleep 0.5")
 
           # Get final rx and tx bytes
@@ -136,7 +166,7 @@ blocks:
           rx_bytes_diff = rx_bytes_final - rx_bytes_initial
           tx_bytes_diff = tx_bytes_final - tx_bytes_initial
 
-          # Convert bytes to Megabits (1 byte = 8 bits, 1 Megabit = 1,000,000 bits)
+          # Convert bytes to Megabits
           rx_mbits = (rx_bytes_diff * 8) / 1000000
           tx_mbits = (tx_bytes_diff * 8) / 1000000
 
@@ -151,7 +181,7 @@ blocks:
 
   - name: date_and_time
     interval: 5
-    interpreter: awk -e
+    interpreter: mawk
     script: |
       BEGIN {
         # Get the current time
